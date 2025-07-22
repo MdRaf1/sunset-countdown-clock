@@ -163,7 +163,7 @@ class ExamplePlugin {
 
 Follow conventional commit format:
 
-```
+```text
 type(scope): description
 
 [optional body]
@@ -184,7 +184,7 @@ type(scope): description
 
 ### Examples
 
-```
+```text
 feat(themes): add ocean theme with animated transitions
 
 Add new ocean-inspired theme with blue and teal gradients.
@@ -193,7 +193,7 @@ Includes smooth animations between theme transitions.
 Closes #123
 ```
 
-```
+```text
 fix(geolocation): handle timeout errors gracefully
 
 Improve error handling for geolocation timeouts by

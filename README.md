@@ -272,6 +272,6 @@ Found a bug or have a feature request? Please check our [Issues](https://github.
 
 ---
 
-**Built with ❤️ and modern JavaScript**
+## Built with ❤️ and modern JavaScript
 
 *This application represents a masterpiece of modern web development, showcasing enterprise-level architecture, security excellence, performance engineering, accessibility leadership, and developer experience innovation.*

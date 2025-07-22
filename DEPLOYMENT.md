@@ -66,4 +66,4 @@ If you encounter any issues:
 
 ---
 
-**Enjoy watching the sunset countdown! 🌅**
+## Enjoy watching the sunset countdown! 🌅
