@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sunset Countdown Clock</title>
+    <meta name="description" content="Real-time countdown to sunset with dynamic themes and astronomical calculations">
+    <meta name="keywords" content="sunset, countdown, clock, astronomy, geolocation, progressive web app">
+    <meta name="author" content="Sunset Clock Team">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1E90FF">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='5' fill='%23ffa500'/></svg>">
+    
+    <!-- SunCalc Library -->
+    <script src="https://cdn.jsdelivr.net/npm/suncalc@1.9.0/suncalc.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body, html {
+            height: 100vh;
+            width: 100vw;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', 'system-ui', -apple-system, sans-serif;
+            background-color: #121212;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        #content-container {
+            text-align: center;
+            padding: 2rem;
+            background-color: transparent;
+            border-radius: 10px;
+            box-shadow: none;
+            max-width: 800px;
+            width: 90%;
+        }
+        
+        #time-display {
+            font-size: 2.5rem;
+            color: #E0E0E0;
+            margin-bottom: 1rem;
+            text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.7);
+        }
+        
+        #location-display {
+            font-size: 1.2rem;
+            color: #E0E0E0;
+            margin-top: 1rem;
+            text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.7);
+        }
+        
+        /* CSS Custom Properties for Themes */
+        :root {
+            --gradient-day: linear-gradient(to top, #87CEEB, #1E90FF);
+            --gradient-pre-sunset: linear-gradient(to top, #FFA07A, #FF7F50);
+            --gradient-golden-hour: linear-gradient(to top, #FF4500, #DA70D6);
+            --gradient-night: linear-gradient(to top, #00008B, #191970);
+            --gradient-error: linear-gradient(to top, #58181F, #962836);
+        }
+        
+        body {
+            transition: background 0.5s ease-in-out;
+        }
+        
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="content-container">
+        <h1 id="time-display">00:00:00</h1>
+        <p id="location-display">Loading location...</p>
+    </div>
+
+    <script>
+        // --- CONFIGURATION VALIDATION ---
+        const CONFIG_ENVIRONMENTS = {
+            development: {
+                UPDATE_INTERVAL: 100, // Faster updates for dev
+                DEBUG_MODE: true,
+                LOG_LEVEL: 'verbose'
+            },
+            production: {
+                UPDATE_INTERVAL: 1000,
+                DEBUG_MODE: false,
+                LOG_LEVEL: 'error'
+            }
+        };
+
+        const CONFIG_SCHEMA = {
+            TIME_THRESHOLDS: { type: 'object', required: ['DAY', 'PRE_SUNSET', 'GOLDEN_HOUR'] },
+            THEME_NAMES: { type: 'array', minLength: 4 },
+            UPDATE_INTERVAL: { type: 'number', min: 100, max: 10000 },
+            MAX_RETRIES: { type: 'number', min: 1, max: 10 }
+        };
+
+        function getEnvironmentConfig() {
+            const env = (typeof process !== 'undefined' && process?.env?.NODE_ENV) || 'development';
+            return { ...CONFIG_ENVIRONMENTS[env] };
+        }
+
+        function validateConfig(config) {
+            const required = ['TIME_THRESHOLDS', 'THEME_NAMES', 'UPDATE_INTERVAL', 'MAX_RETRIES'];
+            const missing = required.filter(key => !(key in config));
+            if (missing.length > 0) {
+                throw new Error(`Missing required config keys: ${missing.join(', ')}`);
+            }
+            
+            // Enhanced validation using schema
+            Object.entries(CONFIG_SCHEMA).forEach(([key, schema]) => {
+                const value = config[key];
+                if (schema.type === 'number') {
+                    if (typeof value !== 'number' || value < schema.min || value > schema.max) {
+                        throw new Error(`${key} must be a number between ${schema.min} and ${schema.max}`);
+                    }
+                } else if (schema.type === 'array') {
+                    if (!Array.isArray(value) || value.length < schema.minLength) {
+                        throw new Error(`${key} must be an array with at least ${schema.minLength} items`);
+                    }
+                } else if (schema.type === 'object' && schema.required) {
+                    schema.required.forEach(prop => {
+                        if (!(prop in value)) {
+                            throw new Error(`${key} missing required property: ${prop}`);
+                        }
+                    });
+                }
+            });
+            
+            // Validate time thresholds are in descending order
+            const { DAY, PRE_SUNSET, GOLDEN_HOUR } = config.TIME_THRESHOLDS;
+            if (DAY <= PRE_SUNSET || PRE_SUNSET <= GOLDEN_HOUR) {
+                throw new Error('TIME_THRESHOLDS must be in descending order');
+            }
+            
+            return config;
+        }
+
+        // --- CONSTANTS ---
+        const ENV_CONFIG = getEnvironmentConfig();
+        const CONFIG = validateConfig({
+            TIME_THRESHOLDS: { DAY: 120, PRE_SUNSET: 60, GOLDEN_HOUR: 0 },
+            THEME_NAMES: ['day', 'pre-sunset', 'golden-hour', 'night'],
+            UPDATE_INTERVAL: ENV_CONFIG.UPDATE_INTERVAL || 1000,
+            MAX_RETRIES: 3,
+            DEBUG_MODE: ENV_CONFIG.DEBUG_MODE || false,
+            LOG_LEVEL: ENV_CONFIG.LOG_LEVEL || 'error'
+        });
+
+        // --- ERROR BOUNDARY ---
+        class ErrorBoundary {
+            constructor(element, options = {}) {
+                this.element = element;
+                this.errorCount = 0;
+                this.maxErrors = options.maxErrors || 5;
+                this.resetTimeout = options.resetTimeout || 300000; // 5 minutes
+                this.errorHistory = [];
+                this.setupErrorReset();
+            }
+            
+            setupErrorReset() {
+                // Reset error count gradually over time
+                setInterval(() => {
+                    if (this.errorCount > 0) {
+                        this.errorCount = Math.max(0, this.errorCount - 1);
+                    }
+                    // Clean old error history
+                    const oneHourAgo = Date.now() - 3600000;
+                    this.errorHistory = this.errorHistory.filter(e => e.timestamp > oneHourAgo);
+                }, this.resetTimeout);
+            }
+            
+            handleError(error, context) {
+                // Sanitize error messages to prevent XSS
+                const sanitizedError = this.sanitizeErrorMessage(error.message);
+                
+                this.errorHistory.push({ 
+                    error: sanitizedError, 
+                    context, 
+                    timestamp: Date.now(),
+                    userAgent: navigator.userAgent.substring(0, 100) // Truncate for privacy
+                });
+                
+                // Rate limiting per context (5 errors per minute)
+                const recentErrors = this.errorHistory.filter(
+                    e => e.context === context && Date.now() - e.timestamp < 60000
+                );
+                
+                if (recentErrors.length > 5) {
+                    console.warn(`Rate limiting errors in ${context}`);
+                    return false;
+                }
+                
+                // Check for repeated errors in same context (legacy check)
+                const similarErrors = this.errorHistory.filter(e => e.context === context).length;
+                if (similarErrors > 3) {
+                    console.warn(`Throttling errors in ${context} due to repeated failures`);
+                    return false;
+                }
+                
+                this.errorCount++;
+                console.error(`Error in ${context}:`, error);
+                
+                if (this.errorCount >= this.maxErrors) {
+                    this.element.innerHTML = `
+                        <div style="color: #ff6b6b; text-align: center;">
+                            Too many errors occurred. Please refresh the page.
+                        </div>
+                    `;
+                    this.announceError('Too many errors occurred. Please refresh the page.');
+                    return false; // Stop further execution
+                }
+                
+                return true; // Continue execution
+            }
+            
+            sanitizeErrorMessage(message) {
+                if (typeof message !== 'string') return 'Unknown error';
+                // Remove potential XSS vectors and limit length
+                return message.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '[script removed]')
+                             .replace(/<[^>]*>/g, '') // Remove all HTML tags
+                             .substring(0, 200); // Limit length
+            }
+            
+            announceError(message) {
+                const announcement = document.createElement('div');
+                announcement.setAttribute('aria-live', 'assertive');
+                announcement.setAttribute('aria-atomic', 'true');
+                announcement.className = 'sr-only';
+                announcement.textContent = message;
+                document.body.appendChild(announcement);
+                
+                setTimeout(() => announcement.remove(), 1000);
+            }
+        }
+
+        // --- STATE MANAGEMENT ---
+        class SunsetCountdownState {
+            constructor() {
+                const self = this;
+                this.subscribers = new Map(); // property -> [callbacks]
+                this.middleware = []; // For state transformation
+                this.history = []; // State history for debugging
+                
+                // Use Proxy for fine-grained reactivity
+                this.data = new Proxy({
+                    location: null,
+                    targetSunset: null,
+                    isInitialized: false,
+                    isVisible: true,
+                    minutesRemaining: 0,
+                    lastUpdate: Date.now()
+                }, {
+                    set(target, property, value) {
+                        const oldValue = target[property];
+                        
+                        // Run middleware before setting
+                        const transformedValue = self.runMiddleware(property, value, oldValue);
+                        
+                        target[property] = transformedValue;
+                        target.lastUpdate = Date.now();
+                        
+                        // Add to history (keep last 10 states)
+                        self.history.push({ 
+                            property, 
+                            oldValue, 
+                            newValue: transformedValue, 
+                            timestamp: Date.now() 
+                        });
+                        if (self.history.length > 10) self.history.shift();
+                        
+                        // Only notify if value actually changed
+                        if (oldValue !== transformedValue) {
+                            self.notifySubscribers(property, transformedValue, oldValue);
+                        }
+                        return true;
+                    }
+                });
+            }
+            
+            addMiddleware(fn) {
+                this.middleware.push(fn);
+            }
+            
+            runMiddleware(property, value, oldValue) {
+                return this.middleware.reduce((acc, fn) => {
+                    try {
+                        return fn(property, acc, oldValue);
+                    } catch (error) {
+                        console.error('Middleware error:', error);
+                        return acc; // Return unchanged value on error
+                    }
+                }, value);
+            }
+            
+            getHistory() {
+                return [...this.history]; // Return copy
+            }
+            
+            // Getter/setter for backward compatibility
+            get location() { return this.data.location; }
+            set location(value) { this.data.location = value; }
+            
+            get targetSunset() { return this.data.targetSunset; }
+            set targetSunset(value) { this.data.targetSunset = value; }
+            
+            get isInitialized() { return this.data.isInitialized; }
+            set isInitialized(value) { this.data.isInitialized = value; }
+            
+            get isVisible() { return this.data.isVisible; }
+            set isVisible(value) { this.data.isVisible = value; }
+            
+            get minutesRemaining() { return this.data.minutesRemaining; }
+            set minutesRemaining(value) { this.data.minutesRemaining = value; }
+            
+            update(newState) {
+                // Change detection to prevent unnecessary notifications
+                const hasChanges = Object.keys(newState).some(key => this.data[key] !== newState[key]);
+                if (!hasChanges) return;
+                
+                Object.assign(this.data, newState);
+            }
+            
+            // Subscribe to specific property changes
+            subscribe(property, callback) {
+                if (!this.subscribers.has(property)) {
+                    this.subscribers.set(property, []);
+                }
+                this.subscribers.get(property).push(callback);
+            }
+            
+            // Legacy subscribe method for backward compatibility
+            subscribeAll(callback) {
+                ['location', 'targetSunset', 'isInitialized', 'isVisible', 'minutesRemaining'].forEach(prop => {
+                    this.subscribe(prop, () => callback(this));
+                });
+            }
+            
+            notifySubscribers(property, newValue, oldValue) {
+                const callbacks = this.subscribers.get(property) || [];
+                callbacks.forEach(callback => {
+                    try {
+                        callback(newValue, oldValue, property);
+                    } catch (error) {
+                        console.error(`Error in ${property} subscriber:`, error);
+                    }
+                });
+            }
+        }
+
+        // --- THEME MANAGER ---
+        class ThemeManager {
+            constructor() {
+                this.themes = new Map();
+                this.currentTheme = 'default';
+                this.registerDefaultThemes();
+            }
+            
+            registerDefaultThemes() {
+                this.registerTheme('default', {
+                    gradients: {
+                        day: 'linear-gradient(to top, #87CEEB, #1E90FF)',
+                        'pre-sunset': 'linear-gradient(to top, #FFA07A, #FF7F50)',
+                        'golden-hour': 'linear-gradient(to top, #FF4500, #DA70D6)',
+                        night: 'linear-gradient(to top, #00008B, #191970)',
+                        error: 'linear-gradient(to top, #58181F, #962836)'
+                    }
+                });
+                
+                this.registerTheme('ocean', {
+                    gradients: {
+                        day: 'linear-gradient(to top, #006994, #0080b7)',
+                        'pre-sunset': 'linear-gradient(to top, #2E8B57, #20B2AA)',
+                        'golden-hour': 'linear-gradient(to top, #FF6347, #FF1493)',
+                        night: 'linear-gradient(to top, #001122, #003366)',
+                        error: 'linear-gradient(to top, #8B0000, #DC143C)'
+                    }
+                });
+            }
+            
+            registerTheme(name, config) {
+                this.themes.set(name, config);
+            }
+            
+            applyTheme(name, animated = true) {
+                const theme = this.themes.get(name);
+                if (!theme) throw new Error(`Theme ${name} not found`);
+                
+                if (animated) {
+                    document.body.style.transition = 'background 0.5s ease-in-out';
+                }
+                
+                Object.entries(theme.gradients).forEach(([key, value]) => {
+                    document.documentElement.style.setProperty(`--gradient-${key}`, value);
+                });
+                
+                this.currentTheme = name;
+                console.log(`Applied theme: ${name}`);
+                
+                if (animated) {
+                    setTimeout(() => {
+                        document.body.style.transition = '';
+                    }, 500);
+                }
+            }
+            
+            getAvailableThemes() {
+                return Array.from(this.themes.keys());
+            }
+        }
+
+        // --- NOTIFICATION PLUGIN ---
+        const NotificationPlugin = {
+            isEnabled: false,
+            
+            async install(clockManager) {
+                if ('Notification' in window) {
+                    const permission = await Notification.requestPermission();
+                    this.isEnabled = permission === 'granted';
+                    console.log('Notification plugin installed, enabled:', this.isEnabled);
+                }
+            },
+            
+            onTick(state, elements) {
+                if (!this.isEnabled) return;
+                
+                const { minutesRemaining } = state;
+                
+                // Notify at specific intervals
+                if ([60, 30, 15, 5, 1].includes(minutesRemaining)) {
+                    this.showNotification(`${minutesRemaining} minute${minutesRemaining !== 1 ? 's' : ''} until sunset!`);
+                }
+            },
+            
+            showNotification(message) {
+                if (this.isEnabled) {
+                    new Notification('Sunset Clock', { 
+                        body: message,
+                        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="%23ffa500"/></svg>'
+                    });
+                }
+            }
+        };
+
+        // --- UTILITY FUNCTIONS ---
+        function isSameDay(date1, date2) {
+            return date1.toDateString() === date2.toDateString();
+        }
+
+        function cacheElements() {
+            const elements = {
+                timeDisplayElement: document.getElementById('time-display'),
+                locationDisplayElement: document.getElementById('location-display'),
+                bodyElement: document.body
+            };
+            
+            // Validate all elements exist
+            Object.entries(elements).forEach(([key, element]) => {
+                if (!element) {
+                    throw new Error(`Required element not found: ${key}`);
+                }
+            });
+            
+            return elements;
+        }
+
+        function validateInputs(timeDiff, element, label) {
+            if (typeof timeDiff !== 'number' || timeDiff < 0) {
+                console.warn('Invalid timeDiff provided:', timeDiff);
+                return false;
+            }
+            if (!element || typeof element.innerText === 'undefined') {
+                console.error('Invalid element provided');
+                return false;
+            }
+            if (typeof label !== 'string') {
+                console.warn('Invalid label provided:', label);
+                return false;
+            }
+            return true;
+        }
+
+        // --- SUNSET CALCULATION ---
+        function getSunsetTime(latitude, longitude, date = new Date()) {
+            if (typeof SunCalc === 'undefined') {
+                throw new Error('SunCalc library failed to load');
+            }
+            
+            if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+                throw new Error('Invalid coordinates provided');
+            }
+            
+            return SunCalc.getTimes(date, latitude, longitude).sunset;
+        }
+
+        // --- DISPLAY FUNCTIONS ---
+        function updateCountdownDisplay(timeDiff, element, label) {
+            if (!validateInputs(timeDiff, element, label)) return;
+            
+            const hours = Math.floor(timeDiff / (1000 * 60 * 60));
+            const minutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((timeDiff % (1000 * 60)) / 1000);
+            
+            const displayText = `${hours}h, ${minutes}m, ${seconds}s ${label}`;
+            element.innerText = displayText;
+            
+            // Accessibility improvements
+            element.setAttribute('aria-live', 'polite');
+            element.setAttribute('aria-label', `Countdown: ${hours} hours, ${minutes} minutes, ${seconds} seconds ${label}`);
+        }
+
+        function getThemeIndex(minutesRemaining) {
+            const { TIME_THRESHOLDS } = CONFIG;
+            if (minutesRemaining > TIME_THRESHOLDS.DAY) return 0; // day
+            if (minutesRemaining > TIME_THRESHOLDS.PRE_SUNSET) return 1; // pre-sunset
+            if (minutesRemaining > TIME_THRESHOLDS.GOLDEN_HOUR) return 2; // golden-hour
+            return 3; // night
+        }
+
+        function updateBackgroundStyle(minutesRemaining, element) {
+            const themeIndex = getThemeIndex(minutesRemaining);
+            const themeName = CONFIG.THEME_NAMES[themeIndex];
+            element.style.background = `var(--gradient-${themeName})`;
+        }
+
+        // --- GEOLOCATION SERVICE ---
+        class GeolocationService {
+            constructor(options = {}) {
+                this.options = {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 300000, // 5 minutes
+                    maxRetries: CONFIG.MAX_RETRIES,
+                    ...options
+                };
+                this.cache = new Map();
+                this.watchId = null;
+            }
+            
+            async getLocation() {
+                const cacheKey = 'user-location';
+                const cached = this.cache.get(cacheKey);
+                
+                // Use cached location if recent
+                if (cached && Date.now() - cached.timestamp < this.options.maximumAge) {
+                    console.log('Using cached location');
+                    return cached.data;
+                }
+                
+                const location = await this.getUserLocationWithRetry();
+                this.cache.set(cacheKey, { data: location, timestamp: Date.now() });
+                return location;
+            }
+            
+            async getUserLocationWithRetry() {
+                for (let i = 0; i < this.options.maxRetries; i++) {
+                    try {
+                        return await this.getUserLocation();
+                    } catch (error) {
+                        console.warn(`Geolocation attempt ${i + 1} failed:`, error.message);
+                        if (i === this.options.maxRetries - 1) throw error;
+                        // Exponential backoff
+                        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)));
+                    }
+                }
+            }
+            
+            getUserLocation() {
+                return new Promise((resolve, reject) => {
+                    if (!navigator.geolocation) {
+                        return reject(new Error('Geolocation is not supported.'));
+                    }
+                    
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => resolve({ 
+                            latitude: position.coords.latitude, 
+                            longitude: position.coords.longitude 
+                        }),
+                        (error) => {
+                            const errorMessages = {
+                                1: 'Location permission denied',
+                                2: 'Location unavailable',
+                                3: 'Location request timeout'
+                            };
+                            reject(new Error(errorMessages[error.code] || 'Unknown location error'));
+                        },
+                        this.options
+                    );
+                });
+            }
+            
+            watchLocation(callback) {
+                if (!navigator.geolocation) return null;
+                
+                this.watchId = navigator.geolocation.watchPosition(
+                    position => callback({
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude
+                    }),
+                    error => console.warn('Location watch error:', error),
+                    this.options
+                );
+                
+                return this.watchId;
+            }
+            
+            stopWatching() {
+                if (this.watchId) {
+                    navigator.geolocation.clearWatch(this.watchId);
+                    this.watchId = null;
+                }
+            }
+        }
+
+        // --- PERFORMANCE MONITOR ---
+        class PerformanceMonitor {
+            constructor(options = {}) {
+                this.metrics = new Map();
+                this.maxMetrics = options.maxMetrics || 100;
+                this.aggregatedStats = new Map(); // For statistical analysis
+            }
+            
+            time(label) {
+                this.metrics.set(label, performance.now());
+            }
+            
+            timeEnd(label) {
+                const start = this.metrics.get(label);
+                if (start) {
+                    const duration = performance.now() - start;
+                    
+                    // Aggregate statistics
+                    this.updateStats(label, duration);
+                    
+                    // Only log if > 5ms and debug mode is on
+                    if (duration > 5 && CONFIG.DEBUG_MODE) {
+                        console.log(`${label}: ${duration.toFixed(2)}ms`);
+                    }
+                    
+                    // Memory management
+                    if (this.metrics.size > this.maxMetrics) {
+                        const oldestKey = this.metrics.keys().next().value;
+                        this.metrics.delete(oldestKey);
+                    }
+                    
+                    this.metrics.delete(label);
+                    return duration;
+                }
+            }
+            
+            updateStats(label, duration) {
+                const stats = this.aggregatedStats.get(label) || { 
+                    count: 0, total: 0, min: Infinity, max: 0, avg: 0 
+                };
+                
+                stats.count++;
+                stats.total += duration;
+                stats.min = Math.min(stats.min, duration);
+                stats.max = Math.max(stats.max, duration);
+                stats.avg = stats.total / stats.count;
+                
+                this.aggregatedStats.set(label, stats);
+            }
+            
+            getStats(label) {
+                return this.aggregatedStats.get(label);
+            }
+            
+            getAllStats() {
+                return Object.fromEntries(this.aggregatedStats);
+            }
+        }
+
+        // --- SECURITY & FEATURE DETECTION ---
+        class FeatureDetector {
+            static checkBrowserSupport() {
+                const features = {
+                    geolocation: 'geolocation' in navigator,
+                    notifications: 'Notification' in window,
+                    proxy: typeof Proxy !== 'undefined',
+                    performance: 'performance' in window,
+                    visibility: 'visibilityState' in document,
+                    serviceWorker: 'serviceWorker' in navigator
+                };
+                
+                const unsupported = Object.entries(features)
+                    .filter(([, supported]) => !supported)
+                    .map(([feature]) => feature);
+                    
+                if (unsupported.length > 0) {
+                    console.warn('Unsupported features:', unsupported);
+                }
+                
+                return { supported: features, missing: unsupported };
+            }
+            
+            static createFallbacks() {
+                // Proxy fallback for older browsers
+                if (typeof Proxy === 'undefined') {
+                    window.Proxy = class ProxyFallback {
+                        constructor(target) {
+                            return target; // Simple fallback
+                        }
+                    };
+                }
+                
+                // Performance fallback
+                if (!window.performance || !window.performance.now) {
+                    window.performance = { 
+                        now: () => Date.now() 
+                    };
+                }
+            }
+        }
+
+        class SecureDataHandler {
+            static sanitizeCoordinates(lat, lon) {
+                // Validate coordinate ranges
+                if (typeof lat !== 'number' || typeof lon !== 'number' ||
+                    lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+                    throw new Error('Invalid coordinates detected');
+                }
+                
+                // Round to prevent location fingerprinting (~1km precision)
+                return {
+                    latitude: Math.round(lat * 100) / 100,
+                    longitude: Math.round(lon * 100) / 100
+                };
+            }
+            
+            static sanitizeUserAgent(ua) {
+                if (typeof ua !== 'string') return 'Unknown';
+                // Remove sensitive information from user agent
+                return ua.replace(/\([^)]*\)/g, '(...)').substring(0, 50);
+            }
+        }
+
+        function validateCSP() {
+            const cspMeta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+            if (!cspMeta && location.protocol === 'https:') {
+                console.warn('No CSP detected. Consider adding Content Security Policy.');
+            }
+        }
+
+        // --- ACCESSIBILITY MANAGER ---
+        class AccessibilityManager {
+            constructor(clockManager) {
+                this.clockManager = clockManager;
+                this.setupKeyboardHandlers();
+                this.setupFocusManagement();
+            }
+            
+            setupKeyboardHandlers() {
+                document.addEventListener('keydown', (e) => {
+                    // Alt + number keys for theme switching
+                    if (e.altKey && e.key >= '1' && e.key <= '9') {
+                        const themeIndex = parseInt(e.key) - 1;
+                        const themes = this.clockManager.getAvailableThemes();
+                        if (themes[themeIndex]) {
+                            this.clockManager.changeTheme(themes[themeIndex]);
+                            this.announceThemeChange(themes[themeIndex]);
+                        }
+                        e.preventDefault();
+                    }
+                    
+                    // Escape key to reset to default theme
+                    if (e.key === 'Escape') {
+                        this.clockManager.changeTheme('default');
+                        this.announceThemeChange('default');
+                    }
+                });
+            }
+            
+            setupFocusManagement() {
+                // Ensure the application is accessible via keyboard
+                const container = document.getElementById('content-container');
+                if (container && !container.hasAttribute('tabindex')) {
+                    container.setAttribute('tabindex', '0');
+                    container.setAttribute('role', 'application');
+                    container.setAttribute('aria-label', 'Sunset countdown application');
+                }
+            }
+            
+            announceThemeChange(themeName) {
+                const announcement = `Theme changed to ${themeName}. Available themes: ${this.clockManager.getAvailableThemes().join(', ')}. Use Alt + number keys to switch themes.`;
+                this.announce(announcement);
+            }
+            
+            announce(message) {
+                const announcer = document.createElement('div');
+                announcer.setAttribute('aria-live', 'polite');
+                announcer.className = 'sr-only';
+                announcer.textContent = message;
+                document.body.appendChild(announcer);
+                setTimeout(() => announcer.remove(), 2000);
+            }
+        }
+
+        // --- ANALYTICS PLUGIN ---
+        const AnalyticsPlugin = {
+            milestones: new Set(),
+            
+            install(clockManager) {
+                console.log('Analytics plugin installed');
+                // Subscribe to minutes remaining changes
+                clockManager.state.subscribe('minutesRemaining', (minutes) => {
+                    if ([60, 30, 15, 5, 1].includes(minutes) && !this.milestones.has(minutes)) {
+                        this.trackMilestone(minutes);
+                        this.milestones.add(minutes);
+                    }
+                });
+                
+                // Reset milestones daily
+                clockManager.state.subscribe('targetSunset', () => {
+                    this.milestones.clear();
+                });
+            },
+            
+            trackMilestone(minutes) {
+                if (CONFIG.DEBUG_MODE) {
+                    console.log(`Analytics: Milestone reached - ${minutes} minutes remaining`);
+                }
+                
+                // In production, this would send to analytics service
+                try {
+                    if (typeof gtag !== 'undefined') {
+                        gtag('event', 'sunset_milestone', {
+                            'minutes_remaining': minutes,
+                            'timestamp': new Date().toISOString()
+                        });
+                    }
+                } catch (error) {
+                    console.warn('Analytics tracking failed:', error);
+                }
+            }
+        };
+
+        // --- GEOLOCATION WITH RETRY (Legacy function for backward compatibility) ---
+        async function getUserLocationWithRetry(maxRetries = CONFIG.MAX_RETRIES) {
+            const geoService = new GeolocationService({ maxRetries });
+            const location = await geoService.getLocation();
+            
+            // Apply security sanitization
+            return SecureDataHandler.sanitizeCoordinates(location.latitude, location.longitude);
+        }
+
+        function getUserLocation() {
+            return new Promise((resolve, reject) => {
+                if (!navigator.geolocation) {
+                    return reject(new Error('Geolocation is not supported.'));
+                }
+                
+                const options = {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 300000 // 5 minutes
+                };
+                
+                navigator.geolocation.getCurrentPosition(
+                    (position) => resolve({ 
+                        latitude: position.coords.latitude, 
+                        longitude: position.coords.longitude 
+                    }),
+                    (error) => {
+                        const errorMessages = {
+                            1: 'Location permission denied',
+                            2: 'Location unavailable',
+                            3: 'Location request timeout'
+                        };
+                        reject(new Error(errorMessages[error.code] || 'Unknown location error'));
+                    },
+                    options
+                );
+            });
+        }
+
+        // --- SUNSET CLOCK MANAGER ---
+        class SunsetClockManager {
+            constructor(location, elements, dependencies = {}) {
+                this.location = location;
+                this.elements = elements;
+                this.intervalId = null;
+                this.state = new SunsetCountdownState();
+                this.plugins = [];
+                this.errorBoundary = new ErrorBoundary(elements.timeDisplayElement);
+                this.themeManager = new ThemeManager();
+                this.visibilityTimeout = null;
+                this.performanceMonitor = new PerformanceMonitor();
+                
+                // Dependency injection for testing
+                this.dateProvider = dependencies.dateProvider || (() => new Date());
+                this.sunCalc = dependencies.sunCalc || (typeof SunCalc !== 'undefined' ? SunCalc : null);
+                
+                this.setupVisibilityHandling();
+            }
+
+            use(plugin) {
+                this.plugins.push(plugin);
+                plugin.install?.(this);
+                return this;
+            }
+
+            setupVisibilityHandling() {
+                document.addEventListener('visibilitychange', () => {
+                    // Debounce rapid visibility changes
+                    clearTimeout(this.visibilityTimeout);
+                    this.visibilityTimeout = setTimeout(() => {
+                        this.state.update({ isVisible: !document.hidden });
+                        if (this.state.isVisible && this.intervalId) {
+                            this.tick(); // Update immediately when tab becomes visible
+                        }
+                    }, 100);
+                });
+            }
+
+            async start() {
+                try {
+                    let targetSunset = this.getSunsetTime(this.location.latitude, this.location.longitude);
+                    const now = this.dateProvider();
+                    
+                    if (now > targetSunset) {
+                        const tomorrow = new Date(now);
+                        tomorrow.setDate(now.getDate() + 1);
+                        targetSunset = this.getSunsetTime(this.location.latitude, this.location.longitude, tomorrow);
+                    }
+                    
+                    this.state.update({ 
+                        targetSunset, 
+                        isInitialized: true,
+                        location: this.location
+                    });
+                    
+                    this.tick();
+                    this.intervalId = setInterval(() => {
+                        // Always tick to keep clock running continuously
+                        this.tick();
+                    }, CONFIG.UPDATE_INTERVAL);
+                    
+                    window.addEventListener('beforeunload', () => this.cleanup());
+                    
+                } catch (error) {
+                    this.handleError(error, 'start');
+                }
+            }
+
+            getSunsetTime(latitude, longitude, date = this.dateProvider()) {
+                if (!this.sunCalc) {
+                    throw new Error('SunCalc library failed to load');
+                }
+                
+                if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+                    throw new Error('Invalid coordinates provided');
+                }
+                
+                return this.sunCalc.getTimes(date, latitude, longitude).sunset;
+            }
+
+            tick() {
+                this.performanceMonitor.time('tick');
+                
+                try {
+                    const currentTime = this.dateProvider();
+                    let { targetSunset } = this.state;
+                    
+                    if (currentTime > targetSunset) {
+                        const nextDay = new Date(targetSunset);
+                        nextDay.setDate(targetSunset.getDate() + 1);
+                        targetSunset = this.getSunsetTime(this.location.latitude, this.location.longitude, nextDay);
+                        this.state.update({ targetSunset });
+                    }
+                    
+                    const timeDifference = SunsetClockManager.calculateTimeRemaining(targetSunset, currentTime);
+                    const minutesRemaining = Math.floor(timeDifference / (1000 * 60));
+                    const isToday = isSameDay(targetSunset, currentTime);
+                    const label = isToday ? "until sunset." : "until tomorrow's sunset.";
+                    
+                    // Update state with minutes remaining for plugins
+                    this.state.update({ minutesRemaining });
+                    
+                    updateCountdownDisplay(timeDifference, this.elements.timeDisplayElement, label);
+                    updateBackgroundStyle(minutesRemaining, this.elements.bodyElement);
+                    
+                    // Execute plugins
+                    this.plugins.forEach(plugin => {
+                        try {
+                            plugin.onTick?.(this.state, this.elements);
+                        } catch (error) {
+                            console.error('Plugin error:', error);
+                        }
+                    });
+                    
+                } catch (error) {
+                    this.handleError(error, 'tick');
+                } finally {
+                    this.performanceMonitor.timeEnd('tick');
+                }
+            }
+
+            // Static methods for easier testing
+            static calculateTimeRemaining(targetSunset, currentTime = new Date()) {
+                return targetSunset.getTime() - currentTime.getTime();
+            }
+            
+            static getThemeForMinutes(minutes, thresholds = CONFIG.TIME_THRESHOLDS) {
+                if (minutes > thresholds.DAY) return 'day';
+                if (minutes > thresholds.PRE_SUNSET) return 'pre-sunset';
+                if (minutes > thresholds.GOLDEN_HOUR) return 'golden-hour';
+                return 'night';
+            }
+
+            handleError(error, context) {
+                if (!this.errorBoundary.handleError(error, context)) {
+                    this.cleanup(); // Stop the clock if too many errors
+                    return;
+                }
+                
+                console.error(`Clock error in ${context}:`, error);
+                this.elements.timeDisplayElement.innerText = 'Clock error occurred';
+                this.elements.bodyElement.style.background = 'var(--gradient-error)';
+            }
+
+            cleanup() {
+                if (this.intervalId) {
+                    clearInterval(this.intervalId);
+                    this.intervalId = null;
+                }
+                if (this.visibilityTimeout) {
+                    clearTimeout(this.visibilityTimeout);
+                    this.visibilityTimeout = null;
+                }
+                console.log('Clock cleanup completed');
+            }
+
+            // Public API methods
+            changeTheme(themeName, animated = true) {
+                try {
+                    this.themeManager.applyTheme(themeName, animated);
+                } catch (error) {
+                    console.error('Failed to change theme:', error);
+                }
+            }
+
+            getAvailableThemes() {
+                return this.themeManager.getAvailableThemes();
+            }
+
+            getState() {
+                return { ...this.state.data };
+            }
+            
+            getPerformanceMetrics() {
+                return Array.from(this.performanceMonitor.metrics.entries());
+            }
+            
+            getPerformanceStats() {
+                return this.performanceMonitor.getAllStats();
+            }
+        }
+
+        // --- CLOCK FACTORY ---
+        class SunsetClockFactory {
+            static create(location, elements, options = {}) {
+                const config = { ...CONFIG, ...options };
+                return new SunsetClockManager(location, elements, config);
+            }
+            
+            static createWithNotifications(location, elements) {
+                const clockManager = new SunsetClockManager(location, elements);
+                clockManager.use(NotificationPlugin);
+                return clockManager;
+            }
+        }
+
+        // --- MAIN EXECUTION BLOCK ---
+        async function initializeSunsetClock() {
+            let elements;
+            
+            try {
+                // Initialize security and feature detection
+                FeatureDetector.createFallbacks();
+                const browserSupport = FeatureDetector.checkBrowserSupport();
+                validateCSP();
+                
+                if (browserSupport.missing.length > 0) {
+                    console.warn('Some features may not work:', browserSupport.missing);
+                }
+                
+                elements = cacheElements();
+                elements.timeDisplayElement.innerText = 'Loading...';
+
+                const location = await getUserLocationWithRetry();
+                elements.locationDisplayElement.innerText = `Lat: ${location.latitude.toFixed(4)}, Lon: ${location.longitude.toFixed(4)}`;
+
+                const clockManager = SunsetClockFactory.createWithNotifications(location, elements);
+                
+                // Add analytics plugin if enabled
+                if (CONFIG.DEBUG_MODE) {
+                    clockManager.use(AnalyticsPlugin);
+                }
+                
+                await clockManager.start();
+
+                // Initialize accessibility manager
+                const accessibilityManager = new AccessibilityManager(clockManager);
+                
+                // Service Worker registration for PWA capabilities
+                if ('serviceWorker' in navigator && location.protocol === 'https:') {
+                    navigator.serviceWorker.register('/sw.js').catch(err => {
+                        console.log('Service Worker registration failed:', err);
+                    });
+                }
+
+                // Expose to global scope for debugging with enhanced API
+                window.sunsetClock = clockManager;
+                window.sunsetClock.debug = {
+                    getState: () => clockManager.getState(),
+                    getStateHistory: () => clockManager.state.getHistory(),
+                    getPerformanceMetrics: () => clockManager.getPerformanceMetrics(),
+                    getPerformanceStats: () => clockManager.getPerformanceStats(),
+                    changeTheme: (theme, animated = true) => clockManager.changeTheme(theme, animated),
+                    getAvailableThemes: () => clockManager.getAvailableThemes(),
+                    getErrorHistory: () => clockManager.errorBoundary.errorHistory,
+                    getBrowserSupport: () => browserSupport,
+                    accessibility: accessibilityManager,
+                    testTheme: (themeName) => {
+                        console.log(`Testing theme: ${themeName}`);
+                        console.log('Day theme (150 min):', SunsetClockManager.getThemeForMinutes(150));
+                        console.log('Pre-sunset theme (45 min):', SunsetClockManager.getThemeForMinutes(45));
+                        console.log('Golden-hour theme (15 min):', SunsetClockManager.getThemeForMinutes(15));
+                        console.log('Night theme (-5 min):', SunsetClockManager.getThemeForMinutes(-5));
+                    },
+                    addStateMiddleware: (fn) => clockManager.state.addMiddleware(fn),
+                    config: CONFIG
+                };
+                
+                console.log('🌅 Sunset clock initialized successfully!');
+                console.log('📊 Available themes:', clockManager.getAvailableThemes());
+                console.log('🔧 Debug API available at window.sunsetClock.debug');
+                console.log('⌨️  Keyboard shortcuts: Alt+1-9 for themes, Escape for default theme');
+                
+                if (CONFIG.DEBUG_MODE) {
+                    console.log('🐛 Debug mode enabled');
+                    console.log('📈 Performance monitoring active');
+                    console.log('📊 Analytics tracking enabled');
+                }
+
+            } catch (error) {
+                console.error('Initialization error:', error);
+                if (elements) {
+                    elements.timeDisplayElement.innerText = 'Unable to load clock';
+                    elements.locationDisplayElement.innerText = `Error: ${error.message}`;
+                    elements.bodyElement.style.background = 'var(--gradient-error)';
+                }
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', initializeSunsetClock);
+    </script>
+</body>
+</html>

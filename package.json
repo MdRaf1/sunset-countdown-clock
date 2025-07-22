@@ -1,0 +1,59 @@
+{
+  "name": "sunset-countdown-clock",
+  "version": "1.0.0",
+  "description": "An enterprise-grade, real-time sunset countdown application built with vanilla JavaScript",
+  "main": "index.html",
+  "scripts": {
+    "start": "python -m http.server 8000",
+    "serve": "npx serve .",
+    "lint": "eslint *.js",
+    "test": "echo \"Test suite not implemented yet\" && exit 0",
+    "build": "echo \"No build step required for vanilla JavaScript\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MdRaf1/sunset-countdown-clock.git"
+  },
+  "keywords": [
+    "sunset",
+    "countdown",
+    "clock",
+    "javascript",
+    "vanilla-js",
+    "geolocation",
+    "suncalc",
+    "astronomy",
+    "progressive-web-app",
+    "accessibility",
+    "enterprise",
+    "real-time",
+    "responsive",
+    "themes"
+  ],
+  "author": "Md. Rafi <refathosain41@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/MdRaf1/sunset-countdown-clock/issues"
+  },
+  "homepage": "https://github.com/MdRaf1/sunset-countdown-clock#readme",
+  "dependencies": {},
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "serve": "^14.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not dead",
+    "not ie 11"
+  ],
+  "files": [
+    "index.html",
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md"
+  ]
+}

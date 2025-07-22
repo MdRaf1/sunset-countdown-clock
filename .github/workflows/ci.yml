@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run ESLint
+      run: npm run lint
+      continue-on-error: true
+    
+    - name: Check file structure
+      run: |
+        echo "Checking required files..."
+        test -f index.html || (echo "Missing index.html" && exit 1)
+        test -f README.md || (echo "Missing README.md" && exit 1)
+        test -f LICENSE || (echo "Missing LICENSE" && exit 1)
+        test -f CONTRIBUTING.md || (echo "Missing CONTRIBUTING.md" && exit 1)
+        echo "All required files present ✓"
+
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Start HTTP server
+      run: |
+        npm run serve &
+        SERVER_PID=$!
+        sleep 5
+        # Basic connectivity test
+        curl -f http://localhost:3000/ || exit 1
+        kill $SERVER_PID
+    
+    - name: HTML validation
+      run: |
+        # Install html5validator
+        pip install html5validator
+        # Validate HTML structure
+        html5validator --root . --match "*.html"
+
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Security audit
+      run: |
+        # Check for common security issues
+        echo "Running security checks..."
+        
+        # Check for inline scripts (should be minimal)
+        INLINE_SCRIPTS=$(grep -c "<script>" index.html || true)
+        echo "Inline scripts found: $INLINE_SCRIPTS"
+        
+        # Check for external dependencies
+        echo "External dependencies:"
+        grep -o 'https://[^"]*' index.html || echo "None found"
+        
+        # Check for potential XSS vectors
+        if grep -q "innerHTML.*=" index.html; then
+          echo "Warning: innerHTML usage detected - ensure proper sanitization"
+        fi
+        
+        echo "Security check completed ✓"
+
+  accessibility:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Accessibility check
+      run: |
+        echo "Checking accessibility features..."
+        
+        # Check for ARIA attributes
+        if grep -q "aria-" index.html; then
+          echo "ARIA attributes found ✓"
+        else
+          echo "Warning: No ARIA attributes detected"
+        fi
+        
+        # Check for semantic HTML
+        if grep -q "<main>\|<header>\|<nav>\|<section>" index.html; then
+          echo "Semantic HTML elements found ✓"
+        else
+          echo "Info: Consider using semantic HTML elements"
+        fi
+        
+        # Check for alt attributes on images
+        if grep -q "<img" index.html && ! grep -q "alt=" index.html; then
+          echo "Warning: Images without alt attributes detected"
+        fi
+        
+        echo "Accessibility check completed ✓"
