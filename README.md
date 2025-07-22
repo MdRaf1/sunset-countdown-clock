@@ -6,6 +6,15 @@ An enterprise-grade, real-time sunset countdown application built with vanilla J
 [![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-yellow.svg)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
 [![PWA Ready](https://img.shields.io/badge/PWA-Ready-blue.svg)](https://web.dev/progressive-web-apps/)
 [![Accessibility](https://img.shields.io/badge/a11y-WCAG_AAA-green.svg)](https://www.w3.org/WAI/WCAG21/Understanding/)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-brightgreen.svg)](https://mdraf1.github.io/sunset-countdown-clock/)
+
+## 🌐 Live Demo
+
+**🚀 [Try it now!](https://mdraf1.github.io/sunset-countdown-clock/) 🚀**
+
+Experience the real-time sunset countdown with dynamic themes and location-based calculations. No installation required - just open in your browser!
+
+> 💡 **Tip**: Allow location access for accurate sunset times in your area, or use the manual location input.
 
 ## ✨ Features
 
@@ -34,6 +43,12 @@ An enterprise-grade, real-time sunset countdown application built with vanilla J
 - **Debug API**: Comprehensive debugging tools for development
 
 ## 🚀 Quick Start
+
+### 🌐 Try Online (Recommended)
+
+**[➡️ Open Live Demo](https://mdraf1.github.io/sunset-countdown-clock/)** - No installation required!
+
+### 💻 Run Locally
 
 1. **Clone the repository**
 
@@ -191,7 +206,36 @@ debug.getPerformanceStats()
 debug.getBrowserSupport()
 ```
 
-## 🛠️ Development
+## � Deployment
+
+This application is automatically deployed using **GitHub Pages** with continuous integration.
+
+### Live Environment
+
+- **URL**: [https://mdraf1.github.io/sunset-countdown-clock/](https://mdraf1.github.io/sunset-countdown-clock/)
+- **Auto-Deploy**: Every push to `main` branch triggers automatic deployment
+- **SSL**: Automatically enabled with GitHub Pages
+- **CDN**: Global content delivery for fast loading worldwide
+
+### Deployment Process
+
+1. **Push to main branch**
+2. **GitHub Actions CI/CD** runs automatically:
+   - Lints JavaScript code
+   - Validates HTML structure
+   - Runs security and accessibility checks
+   - Deploys to GitHub Pages
+
+### Alternative Deployment Options
+
+This project is deployment-ready for multiple platforms:
+
+- **Netlify**: Drag & drop or Git integration
+- **Vercel**: One-click deployment with `vercel` command
+- **GitHub Pages**: Current deployment method (recommended)
+- **Any static hosting**: Upload files to any web server
+
+## �🛠️ Development
 
 ### Code Quality
 
